@@ -35,7 +35,10 @@ public class ProtostuffUtil {
         WRAPPER_SET.add(TreeMap.class);
         WRAPPER_SET.add(Hashtable.class);
         WRAPPER_SET.add(SortedMap.class);
-        WRAPPER_SET.add(Map.class);
+        WRAPPER_SET.add(Set.class);
+        WRAPPER_SET.add(HashSet.class);
+        WRAPPER_SET.add(LinkedHashSet.class);
+        WRAPPER_SET.add(SortedSet.class);
         WRAPPER_SET.add(Object.class);
     }
 
