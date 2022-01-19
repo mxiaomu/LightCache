@@ -1,7 +1,10 @@
 package com.codingmaple.cache;
+
+
 import com.codingmaple.cache.config.GenericCacheConfig;
 import com.codingmaple.cache.register.CacheRegisterCentral;
 import com.codingmaple.cache.serialization.SerializationService;
+import org.springframework.cache.Cache;
 import org.springframework.cache.CacheManager;
 import org.springframework.data.redis.core.RedisTemplate;
 
@@ -24,7 +27,6 @@ public abstract class AbstractCacheService<T> {
     private final CacheRegisterCentral cacheRegisterCentral;
 
 
-
     public AbstractCacheService(GenericCacheConfig genericCacheConfig, CacheRegisterCentral cacheRegisterCentral,
                                 RedisTemplate<String, Object> redisTemplate,
                                 CacheManager cacheManager,
@@ -42,7 +44,7 @@ public abstract class AbstractCacheService<T> {
         this.cacheRegisterCentral = cacheRegisterCentral;
 
         if ( !cacheRegisterCentral.registerCacheName( cacheName ) ){
-            throw new IllegalStateException("存在相同的cacheName: " + cacheName );
+            throw new IllegalStateException("存在相同的cacheName, " + cacheName);
         }
     };
 
@@ -62,11 +64,14 @@ public abstract class AbstractCacheService<T> {
     public abstract T loadDataFromLocalCache(String key, Supplier<T> supplier) ;
     public abstract void removeRedisCache(String key);
     public abstract void removeRedisCache();
+    public abstract void removeLocalCache();
+    public abstract void removeLocalCache(String key);
+    protected abstract void removeLocalCache(Cache cache, String key);
+    protected abstract void removeLocalCache(Cache cache);
     public abstract void removeCache(String key);
     public abstract void removeCache();
     public abstract  T loadDataFromDataBase(Supplier<T> supplier);
     public abstract T convertReadOnlyCache(T obj);
-
 
     public void setSerializationService(SerializationService serializationService) {
         this.serializationService = serializationService;
