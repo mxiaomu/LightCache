@@ -35,7 +35,7 @@ public class CacheInfo implements Serializable {
 		}
 
 		public static CacheInfo RemovedOfCacheInfo ( ) {
-				return new CacheInfo( UUID.randomUUID().toString(), SyncType.REMOVE_ALL );
+				return new CacheInfo( null, SyncType.REMOVE_ALL );
 		}
 
 

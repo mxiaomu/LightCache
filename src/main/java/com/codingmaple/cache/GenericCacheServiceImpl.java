@@ -408,11 +408,7 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> implemen
 
     @Override
     public void publishSyncCacheEvent(CacheInfo cacheInfo) {
-        if ( cacheInfo.getSyncType() == SyncType.REMOVE_ALL ){
-            acquireAll();
-        }else{
-            acquire( getRedisKey( cacheInfo.getKey() ));
-        }
+        releaseAny( cacheInfo.getKey() );
         this.redissonClient.getTopic( getSyncTopic() ).publish( cacheInfo );
     }
 
@@ -423,22 +419,22 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> implemen
         final SyncType syncType = cacheInfo.getSyncType();
         final String key = cacheInfo.getKey();
         lock( getRedisKey( key ) );
-        acquire( getRedisKey( key ));
+        acquireAny( key );
         switch ( syncType ) {
             case REMOVE_ALL:
                 removeLocalCache();
-                releaseAll();
+                releaseAny( key );
                 break;
             case REMOVE_SINGLETON:
                 removeLocalCache( key );
-                release( getRedisKey( key ));
+                releaseAny( key );
                 break;
             default:
                 putCache(cacheInfo.getKey(), cacheInfo.getCachedData());
-                release( getRedisKey( key ));
+                releaseAny( key );
                 break;
         }
-        release( getRedisKey( key ));
+        releaseAny( key );
         unlock( getRedisKey( key ) );
     }
 
@@ -474,6 +470,21 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> implemen
         Optional.ofNullable(
                 super.getRedisTemplate().keys(redisKeys)
         ).orElseGet(HashSet::new).forEach(this::release);
+    }
+
+    private void acquireAny(String key){
+        if ( key == null ){
+            acquireAll();
+        }else{
+            acquire( getRedisKey( key ) );
+        }
+    }
+    private void releaseAny(String key){
+        if ( key == null ){
+            releaseAll();
+        }else{
+            release( getRedisKey(key) );
+        }
     }
 
     private void acquire( String key )  {
