@@ -1,10 +1,11 @@
 package com.codingmaple.cache;
 import com.codingmaple.cache.constants.SyncType;
-import org.checkerframework.checker.units.qual.C;
 
+import java.io.Serializable;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
-public class CacheInfo {
+public class CacheInfo implements Serializable {
 		private String key;
 		private Object cachedData;
 		private SyncType syncType;
@@ -34,11 +35,8 @@ public class CacheInfo {
 		}
 
 		public static CacheInfo RemovedOfCacheInfo ( ) {
-				return new CacheInfo( null, SyncType.REMOVE_ALL );
+				return new CacheInfo( UUID.randomUUID().toString(), SyncType.REMOVE_ALL );
 		}
-
-
-
 
 
 		public String getKey() {

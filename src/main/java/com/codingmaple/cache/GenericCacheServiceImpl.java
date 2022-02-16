@@ -1,12 +1,14 @@
 package com.codingmaple.cache;
 
 import com.codingmaple.cache.config.GenericCacheConfig;
-import com.codingmaple.cache.constants.CacheStatus;
-import com.codingmaple.cache.constants.exception.CacheNotEqualException;
+import com.codingmaple.cache.constants.CacheState;
+import com.codingmaple.cache.constants.SyncType;
 import com.codingmaple.cache.register.CacheRegisterCentral;
 import com.codingmaple.cache.serialization.SerializationService;
-import com.codingmaple.cache.service.CacheEqualService;
 import com.codingmaple.cache.stragety.SyncCacheStrategy;
+import org.redisson.api.RedissonClient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.cache.Cache;
 import org.springframework.cache.CacheManager;
 import org.springframework.core.io.ClassPathResource;
@@ -17,22 +19,28 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.data.redis.serializer.RedisSerializer;
 import org.springframework.scripting.support.ResourceScriptSource;
-import java.util.Collections;
-import java.util.List;
-import java.util.Set;
-import java.util.concurrent.CompletableFuture;
+
+import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 
-public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> {
+public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> implements SyncCacheStrategy {
+
+    private static final Logger log = LoggerFactory.getLogger( GenericCacheServiceImpl.class );
 
     private static final DefaultRedisScript<Long> DEL_SCRIPT;
+
+    private final RedissonClient redissonClient;
+    private final static String SYNC_TOPIC = "SYNC_TOPIC:";
+    private final static String SYNC_LOCK = "SYNC_LOCK:";
+    private final static String SEMAPHORE = "SEMAPHORE:";
 
     static {
         DEL_SCRIPT = getDelScript();
     }
+
 
     public static DefaultRedisScript<Long> getDelScript() {
         ClassPathResource resource = new ClassPathResource("script/del.lua");
@@ -44,22 +52,31 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> {
     }
 
 
-    protected GenericCacheServiceImpl(GenericCacheConfig config, CacheRegisterCentral cacheRegisterCentral, RedisTemplate<String, Object> redisTemplate, CacheManager cacheManager, String cacheName, Class<? super  T> clazz,
+    protected GenericCacheServiceImpl(GenericCacheConfig config,
+                                      CacheRegisterCentral cacheRegisterCentral,
+                                      RedissonClient redissonClient,
+                                      RedisTemplate<String, Object> redisTemplate,
+                                      CacheManager cacheManager, String cacheName, Class<? super  T> clazz,
                                       StoreType storeType,
-                                      SerializationService serializationService,
-                                      SyncCacheStrategy syncCacheStrategy) {
-        super(config, cacheRegisterCentral, redisTemplate, cacheManager, cacheName, clazz, storeType, serializationService, syncCacheStrategy );
+                                      SerializationService serializationService) {
+        super(config, cacheRegisterCentral, redisTemplate, cacheManager, cacheName, clazz, storeType, serializationService);
+        this.redissonClient = redissonClient;
+        this.redissonClient.getTopic( getSyncTopic() ).addListener( CacheInfo.class, ((channel, msg) -> {
+            syncCache( msg );
+        }));
     }
 
+
+
     @Override
-    public Cache getCache() {
+    protected Cache getCache() {
         String cacheName = super.getCacheName();
         CacheManager cacheManager = super.getCacheManager();
         return cacheManager.getCache( cacheName );
     }
 
     @Override
-    public void expireKey(String key, long timeout, TimeUnit timeUnit) {
+    protected void expireKey(String key, long timeout, TimeUnit timeUnit) {
         RedisTemplate<String,Object> redisTemplate = super.getRedisTemplate();
         String redisKey = getRedisKey( key );
         if ( super.getStoreType() == StoreType.BYTE_ARRAY ){
@@ -75,7 +92,7 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> {
 
     @SuppressWarnings("all")
     @Override
-    public boolean hasKey(String key) {
+    protected boolean hasKey(String key) {
         RedisTemplate<String,Object> redisTemplate = super.getRedisTemplate();
         String redisKey = getRedisKey( key );
         if ( super.getStoreType() == StoreType.BYTE_ARRAY ){
@@ -86,7 +103,7 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> {
                     final Long ttl = connection.ttl(redisKeyBytes);
                     return ttl != null && ttl >= -1;
                 }
-            });
+            }, true);
         }else {
             final Long expire = redisTemplate.getExpire(redisKey);
             return expire != null && expire >= -1;
@@ -105,44 +122,25 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> {
         return hasKey( key );
     }
 
-
     @Override
-    public CacheStatus cacheStatus(String key, CacheEqualService<T> cacheEqualService) {
-        String cacheName = super.getCacheName();
-        CacheManager cacheManager = super.getCacheManager();
-        Cache cache = cacheManager.getCache( cacheName );
-        final boolean existTwoLevelCache = isExistTwoLevelCache(key);
-        if ( cache == null ) {
-            if ( !existTwoLevelCache ) return CacheStatus.NOT_FOUND;
-            else return CacheStatus.NOT_FOUND_LOCAL;
-        }else{
-            final Cache.ValueWrapper valueWrapper = cache.get(key);
-            if ( valueWrapper == null ){
-                if ( !existTwoLevelCache ) return CacheStatus.NOT_FOUND;
-                else return CacheStatus.NOT_FOUND_LOCAL;
-            }else {
-                if ( !existTwoLevelCache ) return CacheStatus.NOT_FOUND_REDIS;
-                else {
-                    if ( cacheEqualService != null ){
-                        final T redisCache = getRedisCache(key, true);
-                        GenericCache<T> genericCache = new GenericCache<>( getLocalCache( key ), redisCache );
-                        final boolean sameCache = genericCache.isSameCache(cacheEqualService);
-                        if ( sameCache ) {
-                            return CacheStatus.OK;
-                        }else{
-                            throw new CacheNotEqualException(String.format("%s 's memoryCache and redisCache is not equal !", key));
-                        }
-                    }else{
-                        return CacheStatus.OK;
-                    }
-                }
-            }
-        }
+    public boolean isExistOneLevelCache(String key) {
+        final Cache cache = getCache();
+        return cache != null && ( cache.get( key ) != null );
     }
 
     @Override
-    public CacheStatus cacheStatus(String key) {
-        return cacheStatus( key, null );
+    public CacheState cacheState(String key) {
+        final boolean existTwoLevelCache = isExistTwoLevelCache(key);
+        final boolean existOneLevelCache = isExistOneLevelCache(key);
+        if ( !existOneLevelCache && !existTwoLevelCache ) {
+            return CacheState.NOT_FOUND;
+        }else if ( !existOneLevelCache ){
+            return CacheState.NOT_FOUND_LOCAL;
+        }else if ( !existTwoLevelCache ){
+            return CacheState.NOT_FOUND_REDIS;
+        }else {
+            return CacheState.OK;
+        }
     }
 
     @Override
@@ -151,29 +149,9 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> {
         return loadDataFromLocalCache( key, timeout, timeUnit, predicate , supplier );
     }
 
-    @Override
-    public CacheProvider<T> loadCache(String key) {
-        final CacheStatus cacheStatus = cacheStatus(key);
-        T cache;
-        switch ( cacheStatus ) {
-            case NOT_FOUND_LOCAL:
-                cache = getRedisCache( key, true);
-                break;
-            case NOT_FOUND_REDIS:
-            case OK:
-                cache = getLocalCache( key );
-                break;
-            default:
-                cache = null;
-        }
-        return new CacheProvider<>( cache, cacheStatus );
-    }
-
     @SuppressWarnings("all")
     private T getLocalCache(String key){
-        String cacheName = super.getCacheName();
-        CacheManager cacheManager = super.getCacheManager();
-        Cache cache = cacheManager.getCache( cacheName );
+        final Cache cache = getCache();
         if ( cache == null ) return null;
         final Cache.ValueWrapper valueWrapper = cache.get(key);
         if ( valueWrapper == null ) return null;
@@ -230,41 +208,24 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> {
        return loadDataFromRedisCache( key, timeout, timeUnit, (result) -> true, supplier );
     }
 
-    @SuppressWarnings("unchecked")
-    public T loadDataFromRedisCache(boolean isExistTwoLevelCache, String key, long timeout, TimeUnit timeUnit, Predicate<T> predicate, Supplier<T> supplier) {
-        String redisKey = getRedisKey( key );
+    public T loadDataFromRedisCache(boolean isExistTwoLevelCache, boolean isExistOneLevelCache, String key, long timeout, TimeUnit timeUnit, Predicate<T> cachePredicate, Supplier<T> dataProvider) {
         RedisTemplate<String, Object> redisTemplate = super.getRedisTemplate();
         final StoreType storeType = getStoreType();
-        if ( isExistTwoLevelCache  ) {
-            Class<? super T> clazz = getClazz();
-            T cachedData;
-            switch (storeType) {
-                case VALUE:
-                    cachedData = (T) clazz.cast(redisTemplate.opsForValue().get(redisKey));
-                    break;
-                case LIST:
-                    cachedData = (T) clazz.cast(redisTemplate.opsForList().range(redisKey, 0, -1));
-                    break;
-                case SET:
-                    cachedData = (T)clazz.cast(redisTemplate.opsForSet().members(redisKey));
-                    break;
-                case BYTE_ARRAY:
-                    cachedData = handleByteArrayFromRedis( redisTemplate, redisKey, super.getSerializationService(), clazz);
-                    break;
-                default:
-                    throw new IllegalStateException("序列化类型错误");
-            }
-            if ( !predicate.test( cachedData ) ){
-                final T data = supplier.get();
-                storeCacheToRedisAsync( redisTemplate, key, timeout, timeUnit,
-                        storeType, data );
-                return data;
+        if ( isExistTwoLevelCache ) {
+            T cachedData = getRedisCache( key, true );
+            log.info("从二级缓存中读取");
+            if ( !cachePredicate.test( cachedData ) ){
+                removeCache( key );
+                return dataProvider.get();
             }else{
+                if ( !isExistOneLevelCache ) {
+                    publishSyncCacheEvent(CacheInfo.UpdatedOfCacheInfo( key, cachedData, timeout, timeUnit ) );
+                }
                 return cachedData;
             }
         }else{
-            final T data = supplier.get();
-            storeCacheToRedisAsync( redisTemplate, key, timeout, timeUnit,
+            final T data = dataProvider.get();
+            storeCacheToRedis(false, redisTemplate, key, timeout, timeUnit,
                     storeType, data );
             return data;
         }
@@ -272,47 +233,41 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> {
 
     @Override
     public T loadDataFromRedisCache(String key, long timeout, TimeUnit timeUnit, Predicate<T> predicate, Supplier<T> supplier) {
-        return loadDataFromRedisCache( isExistTwoLevelCache(key), key, timeout, timeUnit, predicate, supplier);
+        return loadDataFromRedisCache( isExistTwoLevelCache(key), isExistOneLevelCache( key ), key, timeout, timeUnit, predicate, supplier);
     }
 
     @SuppressWarnings({"unchecked"})
-    private void storeCacheToRedisAsync(RedisTemplate<String,Object> redisTemplate, String key, Long timeout, TimeUnit timeUnit,
+    private void storeCacheToRedis( boolean isExistTwoLevel, RedisTemplate<String,Object> redisTemplate, String key, Long timeout, TimeUnit timeUnit,
                                         StoreType storeType, T data ){
         String redisKey = getRedisKey( key );
-        CompletableFuture.supplyAsync( () -> {
-            removeRedisCache( key );
-            switch ( storeType ){
-                case VALUE:
-                    redisTemplate.opsForValue().set( redisKey, data );
-                    break;
-                case LIST:
-                    List<T> array = (List<T>) data;
-                    final Object[] objectList = array.toArray(new Object[0]);
-                    redisTemplate.opsForList().rightPushAll( redisKey, objectList );
-                    break;
-                case SET:
-                    Set<T> set = (Set<T>) data;
-                    final Object[] objectSet = set.toArray(new Object[0]);
-                    redisTemplate.opsForSet().add( redisKey, objectSet );
-                    break;
-                case BYTE_ARRAY:
-                    storeByteArray( redisTemplate, redisKey, super.getSerializationService(), data );
-                    break;
-                default:
-                    throw new IllegalStateException("序列化类型错误");
-            }
-            expireKey( key , timeout, timeUnit );
-            return data;
-        }).whenComplete( (resolve, reject) -> {
-           super.getSyncCacheStrategy().sync(
-                   CacheInfo.UpdatedOfCacheInfo( key, resolve, timeout, timeUnit ),
-                   ( cache ) -> {
-                       this.putCache( key, cache );
-                       return true;
-                   }
-           );
-        });
+        if ( isExistTwoLevel ) {
+            removeRedisCache(key);
+        }
+        switch ( storeType ){
+            case VALUE:
+                redisTemplate.opsForValue().set( redisKey, data );
+                break;
+            case LIST:
+                List<T> array = (List<T>) data;
+                final Object[] objectList = array.toArray(new Object[0]);
+                redisTemplate.opsForList().rightPushAll( redisKey, objectList );
+                break;
+            case SET:
+                Set<T> set = (Set<T>) data;
+                final Object[] objectSet = set.toArray(new Object[0]);
+                redisTemplate.opsForSet().add( redisKey, objectSet );
+                break;
+            case BYTE_ARRAY:
+                storeByteArray( redisTemplate, redisKey, super.getSerializationService(), data );
+                break;
+            default:
+                throw new IllegalStateException("序列化类型错误");
+        }
+        expireKey( key , timeout, timeUnit );
+        this.redissonClient.getSemaphore( semaphoreKey( redisKey )).trySetPermits( 2 );
+        publishSyncCacheEvent( CacheInfo.UpdatedOfCacheInfo(key, data, timeout, timeUnit));
     }
+
 
     private void storeByteArray(RedisTemplate<String, Object> redisTemplate, String redisKey, SerializationService serializationService, T data){
         final byte[] byteArray = serializationService.serialize(data);
@@ -327,27 +282,20 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> {
         return loadDataFromLocalCache( key, timeout, timeUnit, ( result ) -> true, supplier);
     }
 
-    @SuppressWarnings("unchecked")
     @Override
-    public T loadDataFromLocalCache(String key, long timeout, TimeUnit timeUnit, Predicate<T> predicate, Supplier<T> supplier) {
-        final Cache cache = getCache();
-        if ( cache != null ){
-            T result;
-            final Cache.ValueWrapper valueWrapper = cache.get(key);
-            // 表示不存在该值的映射
-            if ( valueWrapper == null  ){
-                result = loadDataFromRedisCache(key, timeout, timeUnit, predicate, supplier);
-                return result;
-            }else{
-                result = (T) valueWrapper.get();
-                if (!predicate.test( result ) ) {
-                    return loadDataFromRedisCache(true, key, timeout, timeUnit, predicate, () -> convertReadOnlyCache( result ));
-                }else{
-                    return convertReadOnlyCache( result );
-                }
+    public T loadDataFromLocalCache( String key, long timeout, TimeUnit timeUnit, Predicate<T> cachePredicate, Supplier<T> dataProvider){
+        final boolean existOneLevelCache = isExistOneLevelCache(key);
+        if ( !existOneLevelCache || !isSynced( getRedisKey( key ) )){
+            return loadDataFromRedisCache( isExistTwoLevelCache(key), false,
+                    key, timeout, timeUnit, cachePredicate, dataProvider );
+        }else{
+            final T localCache = getLocalCache(key);
+            if ( !cachePredicate.test( localCache )) {
+                removeCache( key );
             }
+            log.info("从一级缓存中读取");
+            return convertReadOnlyCache( localCache );
         }
-        return loadDataFromRedisCache( key, timeout, timeUnit, predicate, supplier );
     }
 
 
@@ -366,11 +314,7 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> {
         }else{
             redisTemplate.delete( redisKey );
         }
-        super.getSyncCacheStrategy().sync( CacheInfo.RemovedOfCacheInfo( key ), ( cache ) -> {
-            removeLocalCache( key );
-            return true;
-        } );
-
+        publishSyncCacheEvent( CacheInfo.RemovedOfCacheInfo( key ));
     }
 
     @Override
@@ -387,10 +331,7 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> {
         }else {
             redisTemplate.execute(DEL_SCRIPT, Collections.singletonList(getRedisKeys()));
         }
-        super.getSyncCacheStrategy().sync( CacheInfo.RemovedOfCacheInfo(), ( cache ) -> {
-            removeLocalCache();
-            return true;
-        });
+        publishSyncCacheEvent( CacheInfo.RemovedOfCacheInfo() );
     }
 
     @Override
@@ -465,7 +406,96 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> {
         return defaultCacheNamePrefix + this.getCacheName() + ":*";
     }
 
-    private void putCacheIfAbsent(Cache cache, String key, Object value ){
-        cache.putIfAbsent( key, value );
+    @Override
+    public void publishSyncCacheEvent(CacheInfo cacheInfo) {
+        if ( cacheInfo.getSyncType() == SyncType.REMOVE_ALL ){
+            acquireAll();
+        }else{
+            acquire( getRedisKey( cacheInfo.getKey() ));
+        }
+        this.redissonClient.getTopic( getSyncTopic() ).publish( cacheInfo );
     }
+
+
+    @Override
+    public void syncCache( CacheInfo cacheInfo ) {
+        // 二阶段提交
+        final SyncType syncType = cacheInfo.getSyncType();
+        final String key = cacheInfo.getKey();
+        lock( getRedisKey( key ) );
+        acquire( getRedisKey( key ));
+        switch ( syncType ) {
+            case REMOVE_ALL:
+                removeLocalCache();
+                releaseAll();
+                break;
+            case REMOVE_SINGLETON:
+                removeLocalCache( key );
+                release( getRedisKey( key ));
+                break;
+            default:
+                putCache(cacheInfo.getKey(), cacheInfo.getCachedData());
+                release( getRedisKey( key ));
+                break;
+        }
+        release( getRedisKey( key ));
+        unlock( getRedisKey( key ) );
+    }
+
+
+    private String getSyncTopic(){
+        return SYNC_TOPIC + getCacheName();
+    }
+
+    private boolean isSynced(String key){
+        return this.redissonClient.getSemaphore( semaphoreKey( key )).availablePermits() == 2;
+    }
+
+    private void lock(String key) {
+        this.redissonClient.getLock( lockKey( key ) )
+                .lock();
+    }
+    private void unlock(String key){
+        this.redissonClient.getLock( lockKey( key ))
+                .unlock();
+    }
+
+    private void acquireAll(){
+        log.info("加锁所有");
+        final String redisKeys = getRedisKeys();
+        Optional.ofNullable(
+                super.getRedisTemplate().keys(redisKeys)
+        ).orElseGet(HashSet::new).forEach(this::acquire);
+    }
+
+    private void releaseAll(){
+        log.info("释放所有");
+        final String redisKeys = getRedisKeys();
+        Optional.ofNullable(
+                super.getRedisTemplate().keys(redisKeys)
+        ).orElseGet(HashSet::new).forEach(this::release);
+    }
+
+    private void acquire( String key )  {
+        try {
+            this.redissonClient.getSemaphore( semaphoreKey( key ) ).acquire(1);
+            log.info("申请{}", key );
+        }catch (InterruptedException exception){
+            log.error( exception.getMessage(), exception );
+        }
+    }
+
+    private void release( String key ){
+        if ( isSynced( key )) return ;
+        this.redissonClient.getSemaphore( semaphoreKey( key ) ).release();
+        log.info( "释放{}", key );
+    }
+
+    private String semaphoreKey(String key) {
+        return SEMAPHORE + key;
+    }
+    private String lockKey (String key ){
+        return SYNC_LOCK  + key;
+    }
+
 }
