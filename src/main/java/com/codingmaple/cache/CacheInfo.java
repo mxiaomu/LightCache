@@ -2,7 +2,6 @@ package com.codingmaple.cache;
 import com.codingmaple.cache.constants.SyncType;
 
 import java.io.Serializable;
-import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 public class CacheInfo implements Serializable {

@@ -61,9 +61,7 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> implemen
                                       SerializationService serializationService) {
         super(config, cacheRegisterCentral, redisTemplate, cacheManager, cacheName, clazz, storeType, serializationService);
         this.redissonClient = redissonClient;
-        this.redissonClient.getTopic( getSyncTopic() ).addListener( CacheInfo.class, ((channel, msg) -> {
-            syncCache( msg );
-        }));
+        this.redissonClient.getTopic( getSyncTopic() ).addListener( CacheInfo.class, ((channel, msg) -> syncCache( msg )));
     }
 
 
@@ -408,7 +406,7 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> implemen
 
     @Override
     public void publishSyncCacheEvent(CacheInfo cacheInfo) {
-        releaseAny( cacheInfo.getKey() );
+        acquireAny( cacheInfo.getKey() );
         this.redissonClient.getTopic( getSyncTopic() ).publish( cacheInfo );
     }
 
