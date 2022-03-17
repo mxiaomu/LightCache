@@ -1,53 +1,58 @@
 package com.codingmaple.cache;
+
 import com.codingmaple.cache.constants.SyncType;
 
 import java.io.Serializable;
 import java.util.concurrent.TimeUnit;
 
 public class CacheInfo implements Serializable {
+		private String cacheName;
 		private String key;
-		private Object cachedData;
 		private SyncType syncType;
 		private Long timeout;
 		private TimeUnit timeUnit;
 
-		private CacheInfo( String key, Object cachedData, SyncType syncType, Long timeout, TimeUnit timeUnit){
+		public CacheInfo(){
+
+		}
+
+		private CacheInfo(String cacheName, String key, SyncType syncType, Long timeout, TimeUnit timeUnit){
+				this.cacheName = cacheName;
 				this.key = key;
-				this.cachedData = cachedData;
 				this.syncType = syncType;
 				this.timeout = timeout;
 				this.timeUnit = timeUnit;
 		}
 
-		private CacheInfo( String key, SyncType syncType ){
+		private CacheInfo(String cacheName, String key, SyncType syncType ){
+				this.cacheName = cacheName;
 				this.key = key;
 				this.syncType = syncType;
 		}
 
 
-		public static CacheInfo UpdatedOfCacheInfo ( String key, Object cachedData, Long timeout, TimeUnit timeUnit) {
-				return new CacheInfo( key, cachedData, SyncType.UPDATE, timeout, timeUnit );
+		public static CacheInfo UpdatedOfCacheInfo ( String cacheName, String key, Long timeout, TimeUnit timeUnit) {
+				return new CacheInfo( cacheName,key, SyncType.UPDATE, timeout, timeUnit );
 		}
 
-		public static CacheInfo RemovedOfCacheInfo ( String key ) {
-				return new CacheInfo( key, SyncType.REMOVE_SINGLETON );
+		public static CacheInfo RemovedOfCacheInfo ( String cacheName, String key ) {
+				return new CacheInfo(cacheName, key, SyncType.REMOVE_SINGLETON );
 		}
 
-		public static CacheInfo RemovedOfCacheInfo ( ) {
-				return new CacheInfo( null, SyncType.REMOVE_ALL );
+		public static CacheInfo RemovedOfCacheInfo ( String cacheName ) {
+				return new CacheInfo( cacheName, null, SyncType.REMOVE_ALL );
 		}
 
+		public String getCacheName() {
+				return cacheName;
+		}
+
+		public void setCacheName(String cacheName) {
+				this.cacheName = cacheName;
+		}
 
 		public String getKey() {
 				return key;
-		}
-
-		public Object getCachedData() {
-				return cachedData;
-		}
-
-		public void setCachedData(Object cachedData) {
-				this.cachedData = cachedData;
 		}
 
 		public void setKey(String key) {

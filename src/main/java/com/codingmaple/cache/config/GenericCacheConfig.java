@@ -13,8 +13,18 @@ public class GenericCacheConfig {
 
     private String serializationType = "protostuff";
 
+    private Boolean isSyncCache = true;
+
     private Integer maximumSize = 200;
     private Integer initialCapacity = 100;
+
+    public Boolean getSyncCache() {
+        return isSyncCache;
+    }
+
+    public void setSyncCache(Boolean syncCache) {
+        isSyncCache = syncCache;
+    }
 
     public Long getDefaultExpiryTime() {
         return defaultExpiryTime;

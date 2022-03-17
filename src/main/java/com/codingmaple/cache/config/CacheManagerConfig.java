@@ -18,7 +18,6 @@ public class CacheManagerConfig {
     private GenericCacheConfig genericCacheConfig;
 
     @Bean
-    @ConditionalOnMissingBean(CacheManager.class)
     public CacheManager cacheManager( @Qualifier("caffeine") Caffeine<Object,Object> caffeine){
         CaffeineCacheManager manager = new CaffeineCacheManager();
         manager.setCaffeine( caffeine );
