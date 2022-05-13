@@ -451,7 +451,9 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> implemen
 		}
 
 		private boolean isSync() {
-				return super.getCacheConfig().getSyncCache();
+				final List<String> cancelSyncList = super.getCacheConfig().getCancelSyncList();
+				boolean existCancel = !cancelSyncList.isEmpty() && cancelSyncList.contains( super.getCacheName() );
+				return !existCancel && super.getCacheConfig().getSyncCache();
 		}
 
 		@Override

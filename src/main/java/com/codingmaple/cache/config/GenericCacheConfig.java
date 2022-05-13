@@ -2,6 +2,9 @@ package com.codingmaple.cache.config;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
+import java.util.List;
+
 @Component
 @ConfigurationProperties(prefix = "generic-cache")
 public class GenericCacheConfig {
@@ -17,6 +20,16 @@ public class GenericCacheConfig {
 
     private Integer maximumSize = 200;
     private Integer initialCapacity = 100;
+
+    private List<String> cancelSyncList = new ArrayList<>();
+
+    public List<String> getCancelSyncList() {
+        return cancelSyncList;
+    }
+
+    public void setCancelSyncList(List<String> cancelSyncList) {
+        this.cancelSyncList = cancelSyncList;
+    }
 
     public Boolean getSyncCache() {
         return isSyncCache;
