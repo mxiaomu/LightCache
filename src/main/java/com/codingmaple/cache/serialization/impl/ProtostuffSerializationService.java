@@ -2,9 +2,12 @@ package com.codingmaple.cache.serialization.impl;
 
 import com.codingmaple.cache.serialization.SerializationService;
 import com.codingmaple.cache.serialization.impl.util.ProtostuffUtil;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Component;
 import org.springframework.stereotype.Service;
 
-@Service("protostuffSerializationService")
+@Component
+@ConditionalOnProperty(name = "generic-cache.serialization-type",havingValue = "protostuff")
 public class ProtostuffSerializationService implements SerializationService {
 
     @Override

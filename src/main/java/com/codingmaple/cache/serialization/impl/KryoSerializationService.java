@@ -6,13 +6,16 @@ import com.esotericsoftware.kryo.io.Input;
 import com.esotericsoftware.kryo.io.Output;
 import com.esotericsoftware.kryo.util.DefaultInstantiatorStrategy;
 import org.objenesis.strategy.StdInstantiatorStrategy;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Component;
 import org.springframework.stereotype.Service;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 
-@Service("kryoSerializationService")
+@Component
+@ConditionalOnProperty(name = "generic-cache.serialization-type",havingValue = "kryo")
 public class KryoSerializationService implements SerializationService {
 
     private static final Kryo kryo;

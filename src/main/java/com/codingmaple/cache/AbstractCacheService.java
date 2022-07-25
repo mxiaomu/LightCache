@@ -1,7 +1,7 @@
 package com.codingmaple.cache;
 
 
-import com.codingmaple.cache.config.GenericCacheConfig;
+import com.codingmaple.cache.config.properties.GenericCacheProperties;
 import com.codingmaple.cache.constants.CacheState;
 import com.codingmaple.cache.register.CacheRegisterCentral;
 import com.codingmaple.cache.serialization.SerializationService;
@@ -22,10 +22,10 @@ public abstract class AbstractCacheService<T> {
     private Class<? super T> clazz;
     private SerializationService serializationService;
     private StoreType storeType;
-    private final GenericCacheConfig cacheConfig;
+    private final GenericCacheProperties cacheConfig;
     private final CacheRegisterCentral cacheRegisterCentral;
 
-    public AbstractCacheService(GenericCacheConfig genericCacheConfig,
+    public AbstractCacheService(GenericCacheProperties genericCacheProperties,
                                 CacheRegisterCentral cacheRegisterCentral,
                                 RedisTemplate<String, Object> redisTemplate,
                                 CacheManager cacheManager,
@@ -39,7 +39,7 @@ public abstract class AbstractCacheService<T> {
         this.clazz = clazz;
         this.serializationService = serializationService;
         this.storeType = storeType;
-        this.cacheConfig = genericCacheConfig;
+        this.cacheConfig = genericCacheProperties;
         this.cacheRegisterCentral = cacheRegisterCentral;
 
         if ( !cacheRegisterCentral.registerCacheName( cacheName ) ){
@@ -179,9 +179,9 @@ public abstract class AbstractCacheService<T> {
      *  删除指定键的本地缓存
       * @param key
      */
-    protected abstract void removeLocalCache(String key);
-    protected abstract void removeLocalCache(Cache cache, String key);
-    protected abstract void removeLocalCache(Cache cache);
+    public abstract void removeLocalCache(String key);
+    public abstract void removeLocalCache(Cache cache, String key);
+    public abstract void removeLocalCache(Cache cache);
     public abstract void removeCache(String key);
     public abstract void removeCache();
 
@@ -191,7 +191,7 @@ public abstract class AbstractCacheService<T> {
      * @param key 键
      * @param value 值
      */
-    protected abstract void putCache( Cache cache, String key, Object value );
+    protected abstract void putCache( Cache cache, String key, Object value, boolean isSync);
 
     /**
      * 设置缓存
@@ -199,6 +199,7 @@ public abstract class AbstractCacheService<T> {
      * @param value 值
      */
     protected abstract void putCache( String key, Object value );
+    protected abstract void putCache( String key, Object value, boolean isSync );
 
     /**
      * 转化成只读数据
@@ -265,12 +266,11 @@ public abstract class AbstractCacheService<T> {
         this.clazz = clazz;
     }
 
-    public GenericCacheConfig getCacheConfig() {
+    public GenericCacheProperties getCacheConfig() {
         return cacheConfig;
     }
 
     public CacheRegisterCentral getCacheRegisterService() {
         return cacheRegisterCentral;
     }
-
 }

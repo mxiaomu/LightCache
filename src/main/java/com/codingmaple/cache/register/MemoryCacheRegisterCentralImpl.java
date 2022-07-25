@@ -1,11 +1,16 @@
 package com.codingmaple.cache.register;
 
 
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Component;
+
 import java.util.HashSet;
 import java.util.Set;
 import java.util.concurrent.ConcurrentSkipListSet;
 
 
+@ConditionalOnProperty(prefix = "generic-cache", name = "register-center", havingValue = "memory")
+@Component
 public class MemoryCacheRegisterCentralImpl extends CacheRegisterCentral {
 
     private static final Set<String> REGISTER_CENTRAL = new ConcurrentSkipListSet<>();

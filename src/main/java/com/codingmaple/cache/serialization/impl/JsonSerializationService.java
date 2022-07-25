@@ -3,9 +3,12 @@ import com.codingmaple.cache.serialization.SerializationService;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.springframework.stereotype.Service;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Component;
 
-@Service("jsonSerializationService")
+
+@Component
+@ConditionalOnProperty(name = "generic-cache.serialization-type",havingValue = "json")
 public class JsonSerializationService implements SerializationService {
 
     private static final ObjectMapper MAPPER ;

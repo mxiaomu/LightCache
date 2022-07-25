@@ -1,97 +1,88 @@
 package com.codingmaple.cache;
-import com.codingmaple.cache.config.GenericCacheConfig;
+import com.codingmaple.cache.config.properties.GenericCacheProperties;
+import com.codingmaple.cache.enums.Mode;
 import com.codingmaple.cache.register.CacheRegisterCentral;
 import com.codingmaple.cache.serialization.SerializationService;
-import com.codingmaple.cache.serialization.impl.JsonSerializationService;
-import com.codingmaple.cache.serialization.impl.KryoSerializationService;
-import com.codingmaple.cache.serialization.impl.ProtostuffSerializationService;
-import org.redisson.api.RedissonClient;
-import org.springframework.beans.factory.annotation.Qualifier;
+import com.codingmaple.cache.strategy.Notification;
 import org.springframework.cache.CacheManager;
-import org.springframework.context.ApplicationContext;
 import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.stereotype.Component;
 
-@Component
 public class CacheFactory {
-
-    private final ApplicationContext context;
-    private final RedisTemplate<String,Object> redisTemplate;
+    private  RedisTemplate<String,Object> redisTemplate;
     private final CacheManager cacheManager;
     private final CacheRegisterCentral cacheRegisterCentral;
-    private final GenericCacheConfig genericCacheConfig;
+    private final GenericCacheProperties genericCacheProperties;
     private final SerializationService serializationService;
-    private final RedissonClient redissonClient;
+    private  Notification notification;
 
-
-    public CacheFactory(ApplicationContext context,
-                        CacheManager cacheManager,
-                        @Qualifier("redisRegisterCentral") CacheRegisterCentral registerCentral,
-                        GenericCacheConfig genericCacheConfig){
-        this.context = context;
-        this.redisTemplate = context.getBean("redisTemplate", RedisTemplate.class);
-        this.redissonClient = context.getBean("redissonClient", RedissonClient.class);
+    public CacheFactory(CacheManager cacheManager,
+                        CacheRegisterCentral registerCentral,
+                        GenericCacheProperties genericCacheProperties,
+                        SerializationService serializationService){
+//        this.redisTemplate = redisTemplate;
         this.cacheManager = cacheManager;
         this.cacheRegisterCentral = registerCentral;
-        this.genericCacheConfig = genericCacheConfig;
-        this.serializationService = selectionService( genericCacheConfig.getSerializationType() );
+        this.genericCacheProperties = genericCacheProperties;
+        this.serializationService = serializationService;
+//        this.notification = notification;
     }
 
-
-
-    private SerializationService selectionService( String serializationType ){
-        switch ( serializationType ){
-            case "protostuff":
-                return this.context.getBean(ProtostuffSerializationService.class);
-            case "json":
-                return this.context.getBean(JsonSerializationService.class );
-            default:
-                return this.context.getBean( KryoSerializationService.class );
-        }
+    public void setNotification(Notification notification) {
+        this.notification = notification;
     }
 
-    public <T> AbstractCacheService<T> createNormalStore(String cacheName, Class<T> clazz){
-        return new GenericCacheServiceImpl<T>(
-                genericCacheConfig,
+    public void setRedisTemplate(RedisTemplate<String, Object> redisTemplate) {
+        this.redisTemplate = redisTemplate;
+    }
+
+    public <T> AbstractCacheService<T> createNormalStore(Mode mode, String cacheName, Class<T> clazz){
+        return new GenericCacheServiceImpl<>(
+                genericCacheProperties,
                 cacheRegisterCentral,
-                this.redissonClient,
                 redisTemplate,
                 cacheManager,
                 cacheName,
                 clazz,
-                AbstractCacheService.convertServiceType( clazz ),
-                serializationService
+                AbstractCacheService.convertServiceType(clazz),
+                mode,
+                serializationService,
+                notification
         );
     }
 
-    public <T> AbstractCacheService<T> createByteStore(String cacheName, Class<T> clazz){
-        return new GenericCacheServiceImpl<T>(
-                genericCacheConfig,
+    public <T> AbstractCacheService<T> createByteStore(Mode mode, String cacheName, Class<T> clazz){
+        return new GenericCacheServiceImpl<>(
+                genericCacheProperties,
                 cacheRegisterCentral,
-                this.redissonClient,
-                redisTemplate,
-                cacheManager,
-                cacheName,
-                clazz,
-                StoreType.BYTE_ARRAY,
-                serializationService
-        );
-    }
-
-    public <T> AbstractCacheService<T> createByteStore(String cacheName, Class<T> clazz, SerializationService serializationService){
-        return new GenericCacheServiceImpl<T>(
-                genericCacheConfig,
-                cacheRegisterCentral,
-                this.redissonClient,
                 redisTemplate,
                 cacheManager,
                 cacheName,
                 clazz,
                 StoreType.BYTE_ARRAY,
-                serializationService
+                mode,
+                serializationService,
+                notification
         );
     }
 
+    public <T> AbstractCacheService<T> createByteStore(Mode mode, String cacheName, Class<T> clazz, SerializationService serializationService){
+        return new GenericCacheServiceImpl<>(
+                genericCacheProperties,
+                cacheRegisterCentral,
+                redisTemplate,
+                cacheManager,
+                cacheName,
+                clazz,
+                StoreType.BYTE_ARRAY,
+                mode,
+                serializationService,
+                notification
+        );
+    }
+
+    private boolean isSyncLocal(Mode mode){
+        return mode == Mode.SINGLE_UP || mode == Mode.MIXTURE;
+    }
 
 
 

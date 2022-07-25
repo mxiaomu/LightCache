@@ -1,11 +1,16 @@
 package com.codingmaple.cache.register;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.stereotype.Component;
+
 import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
 
+@ConditionalOnProperty(prefix = "generic-cache", name = "register-center", havingValue = "redis")
+@Component
 public class RedisCacheRegisterCentralImpl extends CacheRegisterCentral {
 
     private static final String REDIS_CACHE_NAME_CENTER_KEY = "cachedCacheManagerCenter";

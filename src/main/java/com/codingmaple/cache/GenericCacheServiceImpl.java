@@ -1,101 +1,50 @@
 package com.codingmaple.cache;
 
-import com.codingmaple.cache.config.GenericCacheConfig;
+import com.codingmaple.cache.config.properties.GenericCacheProperties;
 import com.codingmaple.cache.constants.CacheState;
-import com.codingmaple.cache.constants.SyncType;
+import com.codingmaple.cache.enums.Mode;
 import com.codingmaple.cache.register.CacheRegisterCentral;
 import com.codingmaple.cache.serialization.SerializationService;
-import com.codingmaple.cache.stragety.SyncCacheStrategy;
-import com.codingmaple.cache.stragety.impl.TopicSync;
-import org.redisson.api.RedissonClient;
+import com.codingmaple.cache.strategy.Notification;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.cache.Cache;
 import org.springframework.cache.CacheManager;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.dao.DataAccessException;
 import org.springframework.data.redis.connection.RedisConnection;
-import org.springframework.data.redis.core.RedisCallback;
-import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.data.redis.core.script.DefaultRedisScript;
+import org.springframework.data.redis.connection.RedisConnectionFactory;
+import org.springframework.data.redis.core.*;
 import org.springframework.data.redis.serializer.RedisSerializer;
-import org.springframework.scripting.support.ResourceScriptSource;
 
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 
-public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> implements SyncExecutor {
+public class GenericCacheServiceImpl<T> extends AbstractCacheService<T>{
 
 		private static final Logger log = LoggerFactory.getLogger(GenericCacheServiceImpl.class);
 
-		private static final DefaultRedisScript<Long> DEL_SCRIPT;
-
-		private final ReentrantLock lock = new ReentrantLock();
-		private SyncCacheStrategy syncCacheStrategy;
-
-		private final static String DEL_LUA_SCRIPT = "local function scan(key)\n" +
-						"    local cursor = 0\n" +
-						"    local keynum = 0\n" +
-						"    repeat\n" +
-						"        local res = redis.call(\"scan\", cursor, \"match\", key)\n" +
-						"\n" +
-						"        if (res ~= nil and #res >= 0) then\n" +
-						"            redis.replicate_commands()\n" +
-						"            cursor = tonumber(res[1])\n" +
-						"            local ks = res[2]\n" +
-						"            keynum = #ks\n" +
-						"            for i=1,keynum,1 do\n" +
-						"                local k = tostring(ks[i])\n" +
-						"                redis.call(\"del\", k)\n" +
-						"            end\n" +
-						"        end\n" +
-						"    until (cursor <= 0)\n" +
-						"\n" +
-						"    return keynum\n" +
-						"end\n" +
-						"\n" +
-						"local a = #KEYS\n" +
-						"local b = 1\n" +
-						"local total = 0\n" +
-						"while (b <= a)\n" +
-						"do\n" +
-						"    total = total + scan(KEYS[b])\n" +
-						"    b = b + 1\n" +
-						"end\n" +
-						"\n" +
-						"return total";
+		private final Mode mode;
+		private Notification notification;
 
 
-		static {
-				DEL_SCRIPT = getDelScript();
+		public void setNotification(Notification notification) {
+				this.notification = notification;
 		}
 
-
-		public static DefaultRedisScript<Long> getDelScript() {
-				DefaultRedisScript<Long> script = new DefaultRedisScript<>();
-				script.setScriptText(DEL_LUA_SCRIPT);
-				script.setResultType(Long.class);
-				return script;
-		}
-
-
-		protected GenericCacheServiceImpl(GenericCacheConfig config,
+		protected GenericCacheServiceImpl(GenericCacheProperties config,
 		                                  CacheRegisterCentral cacheRegisterCentral,
-		                                  RedissonClient redissonClient,
 		                                  RedisTemplate<String, Object> redisTemplate,
 		                                  CacheManager cacheManager, String cacheName, Class<? super T> clazz,
 		                                  StoreType storeType,
-		                                  SerializationService serializationService) {
+		                                  Mode mode,
+		                                  SerializationService serializationService,
+		                                  Notification notification) {
 				super(config, cacheRegisterCentral, redisTemplate, cacheManager, cacheName, clazz, storeType, serializationService);
-				if (config.getSyncCache()) {
-						syncCacheStrategy = new TopicSync(redissonClient);
-						syncCacheStrategy.subscribe(cacheName, this);
-				}
+				this.mode = mode;
+				this.notification = notification;
 		}
 
 
@@ -244,15 +193,17 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> implemen
 				final StoreType storeType = getStoreType();
 				if (isExistTwoLevelCache) {
 						T cachedData = getRedisCache(key, true);
-						log.info("从二级缓存中读取");
 						if (!cachePredicate.test(cachedData)) {
 								removeCache(key);
 								return dataProvider.get();
 						} else {
 								log.error("isExistOneLevelCache:{}", isExistOneLevelCache);
-								if (isSync() && !isExistOneLevelCache) {
-										this.syncCacheStrategy.publishSyncCacheEvent(CacheInfo.UpdatedOfCacheInfo(getCacheName(),
-														key, timeout, timeUnit));
+								if ( mode == Mode.DISTRIBUTED ) {
+										return cachedData;
+								}else if ( mode == Mode.MIXTURE ) {
+										if (!isExistOneLevelCache) {
+												putCache(key, cachedData, true );
+										}
 								}
 								return cachedData;
 						}
@@ -316,18 +267,30 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> implemen
 		@Override
 		public T loadDataFromLocalCache(String key, long timeout, TimeUnit timeUnit, Predicate<T> cachePredicate, Supplier<T> dataProvider) {
 				final boolean existOneLevelCache = isExistOneLevelCache(key);
-				if (!existOneLevelCache || !isSynced()) {
-						return loadDataFromRedisCache(isExistTwoLevelCache(key), false,
-										key, timeout, timeUnit, cachePredicate, dataProvider);
+				if (!existOneLevelCache) {
+						if ( mode == Mode.SINGLE ) {
+								T value = dataProvider.get();
+								putCache( key, value , false );
+								return value;
+						} else if ( mode == Mode.SINGLE_UP ) {
+								T value = dataProvider.get();
+								putCache( key, value, true );
+								return value;
+						} else if ( mode == Mode.DISTRIBUTED || mode == Mode.MIXTURE ) {
+								return loadDataFromRedisCache(isExistTwoLevelCache(key), false,
+												key, timeout, timeUnit, cachePredicate, dataProvider);
+						} else {
+								return dataProvider.get();
+						}
 				} else {
 						final T localCache = getLocalCache(key);
 						if (!cachePredicate.test(localCache)) {
 								removeCache(key);
 						}
-						log.info("从一级缓存中读取");
 						return convertReadOnlyCache(localCache);
 				}
 		}
+
 
 
 		@Override
@@ -345,9 +308,6 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> implemen
 				} else {
 						redisTemplate.delete(redisKey);
 				}
-				if (isSync()) {
-						this.syncCacheStrategy.publishSyncCacheEvent(CacheInfo.RemovedOfCacheInfo(getCacheName(), key));
-				}
 		}
 
 		@Override
@@ -362,10 +322,8 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> implemen
 								return 0L;
 						}, true);
 				} else {
-						redisTemplate.execute(DEL_SCRIPT, Collections.singletonList(getRedisKeys()));
-				}
-				if (isSync()) {
-						this.syncCacheStrategy.publishSyncCacheEvent(CacheInfo.RemovedOfCacheInfo(super.getCacheName()));
+						final Set<String> keys = scan(getRedisKeys());
+						super.getRedisTemplate().delete( keys );
 				}
 		}
 
@@ -376,6 +334,9 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> implemen
 				Cache cache = cacheManager.getCache(cacheName);
 				if (cache != null) {
 						cache.clear();
+						if ( isSyncLocal() ) {
+								notification.syncNotify( cacheName, null );
+						}
 				}
 		}
 
@@ -386,6 +347,9 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> implemen
 				Cache cache = cacheManager.getCache(cacheName);
 				if (cache != null) {
 						cache.evict(key);
+						if ( isSyncLocal() ) {
+								notification.syncNotify(cacheName, key);
+						}
 				}
 		}
 
@@ -393,6 +357,9 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> implemen
 		public void removeLocalCache(Cache cache, String key) {
 				if (cache != null) {
 						cache.evict(key);
+						if ( isSyncLocal() ) {
+								notification.syncNotify(super.getCacheName(), key);
+						}
 				}
 		}
 
@@ -400,29 +367,43 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> implemen
 		public void removeLocalCache(Cache cache) {
 				if (cache != null) {
 						cache.clear();
+						if ( isSyncLocal() ) {
+								notification.syncNotify(super.getCacheName(), null);
+						}
 				}
 		}
 
 		@Override
 		public void removeCache(String key) {
 				removeRedisCache(key);
+				removeLocalCache(key);
 		}
 
 		@Override
 		public void removeCache() {
 				removeRedisCache();
+				removeLocalCache();
 		}
 
 		@Override
-		public void putCache(Cache cache, String key, Object value) {
+		public void putCache(Cache cache, String key, Object value, boolean isSync ) {
 				removeLocalCache(cache, key);
 				final Cache.ValueWrapper valueWrapper = cache.putIfAbsent(key, value);
+				if ( isSync ) {
+						notification.syncNotify(super.getCacheName(), key);
+				}
 		}
 
 		@Override
-		public void putCache(String key, Object value) {
+		protected void putCache(String key, Object value) {
 				final Cache cache = getCache();
-				putCache(cache, key, value);
+				putCache(cache, key, value, isSyncLocal() );
+		}
+
+		@Override
+		protected void putCache(String key, Object value, boolean isSync) {
+				final Cache cache = getCache();
+				putCache(cache, key, value, isSync );
 		}
 
 		@SuppressWarnings("all")
@@ -441,51 +422,32 @@ public class GenericCacheServiceImpl<T> extends AbstractCacheService<T> implemen
 				return defaultCacheNamePrefix + this.getCacheName() + ":*";
 		}
 
-		private boolean isSynced() {
-				return !this.lock.isLocked();
-		}
-
 		private Set<String> getRedisKeySet() {
 				final String redisKeys = getRedisKeys();
 				return super.getRedisTemplate().keys(redisKeys);
 		}
 
-		private boolean isSync() {
-				final List<String> cancelSyncList = super.getCacheConfig().getCancelSyncList();
-				boolean existCancel = !cancelSyncList.isEmpty() && cancelSyncList.contains( super.getCacheName() );
-				return !existCancel && super.getCacheConfig().getSyncCache();
+		private boolean isSyncLocal(){
+				return mode == Mode.SINGLE_UP || mode == Mode.MIXTURE;
 		}
 
-		@Override
-		public void executeSync(CacheInfo cacheInfo) {
-				CompletableFuture.runAsync(() -> {
-						lock.lock();
-						final SyncType syncType = cacheInfo.getSyncType();
-						String key = cacheInfo.getKey();
-						switch (syncType) {
-								case REMOVE_ALL:
-										removeLocalCache();
-										break;
-								case REMOVE_SINGLETON:
-										removeLocalCache(key);
-										break;
-								default:
-										T data = getRedisCache(key, true);
-										putCache(cacheInfo.getKey(), data);
-										break;
-						}
-				}).whenComplete((resolve, reject) -> {
-						try {
-								if (reject != null) {
-										log.error(reject.getMessage(), reject);
-								}
-						} finally {
-								if (lock.isLocked()) {
-										log.info("结束任务");
-										lock.unlock();
-								}
-						}
-				});
 
+		public Set<String> scan(String pattern) {
+				ScanOptions options = ScanOptions.scanOptions().match(pattern).build();
+				RedisConnectionFactory factory = super.getRedisTemplate().getConnectionFactory();
+				RedisConnection connection = Objects.requireNonNull(factory).getConnection();
+				Cursor<byte[]> cursor = connection.scan(options);
+				Set<String> result = new HashSet<>();
+				while (cursor.hasNext()) {
+						result.add(new String(cursor.next()));
+				}
+				try {
+						RedisConnectionUtils.releaseConnection(connection, factory);
+				} catch (Exception e) {
+						log.error(e.getMessage(), e);
+						return null;
+				}
+				return result;
 		}
+
 }
